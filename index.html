@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firefox History JSON to CSV Converter</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 20px;
+            transition: border-color 0.3s;
+        }
+        .upload-area:hover {
+            border-color: #007acc;
+        }
+        .upload-area.dragover {
+            border-color: #007acc;
+            background-color: #f0f8ff;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+        }
+        button {
+            background-color: #007acc;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background-color: #005a9e;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .preview {
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background-color: #f9f9f9;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🦊 Firefox History JSON to CSV Converter</h1>
+        
+        <div class="upload-area" id="uploadArea">
+            <p><strong>Drop your JSON file here or click to browse</strong></p>
+            <input type="file" id="fileInput" accept=".json" />
+            <p>Supports Firefox history export JSON files</p>
+        </div>
+        
+        <div style="text-align: center;">
+            <button id="convertBtn" disabled>Convert to CSV</button>
+            <button id="downloadBtn" disabled>Download CSV</button>
+        </div>
+        
+        <div id="status"></div>
+        <div id="preview"></div>
+    </div>
+
+    <script>
+        let jsonData = null;
+        let csvContent = '';
+        
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const convertBtn = document.getElementById('convertBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const status = document.getElementById('status');
+        const preview = document.getElementById('preview');
+        
+        // Drag and drop functionality
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+        
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        function handleFile(file) {
+            if (!file.name.endsWith('.json')) {
+                showStatus('Please select a JSON file.', 'error');
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const content = e.target.result;
+                    
+                    // Try to parse as JSON
+                    let parsedData;
+                    try {
+                        parsedData = JSON.parse(content);
+                    } catch (parseError) {
+                        // If direct parsing fails, try to clean up the content
+                        // Sometimes exports have extra characters or formatting
+                        const cleanContent = content.trim();
+                        parsedData = JSON.parse(cleanContent);
+                    }
+                    
+                    // Validate that it's an array
+                    if (!Array.isArray(parsedData)) {
+                        throw new Error('JSON file should contain an array of history entries');
+                    }
+                    
+                    // Validate structure of first entry
+                    if (parsedData.length > 0) {
+                        const firstEntry = parsedData[0];
+                        const requiredFields = ['url', 'title'];
+                        const missingFields = requiredFields.filter(field => !(field in firstEntry));
+                        if (missingFields.length > 0) {
+                            throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
+                        }
+                    }
+                    
+                    jsonData = parsedData;
+                    convertBtn.disabled = false;
+                    showStatus(`Successfully loaded ${parsedData.length} history entries.`, 'success');
+                    
+                } catch (error) {
+                    showStatus(`Error reading JSON file: ${error.message}`, 'error');
+                    jsonData = null;
+                    convertBtn.disabled = true;
+                }
+            };
+            reader.readAsText(file);
+        }
+        
+        convertBtn.addEventListener('click', convertToCSV);
+        downloadBtn.addEventListener('click', downloadCSV);
+        
+        function convertToCSV() {
+            if (!jsonData) return;
+            
+            try {
+                // Get all unique keys from all entries
+                const allKeys = new Set();
+                jsonData.forEach(entry => {
+                    Object.keys(entry).forEach(key => allKeys.add(key));
+                });
+                
+                // Convert to array and sort for consistent column order
+                const headers = Array.from(allKeys).sort();
+                
+                // Ensure common fields come first
+                const priorityHeaders = ['id', 'url', 'title', 'lastVisitTime', 'visitCount'];
+                const sortedHeaders = [
+                    ...priorityHeaders.filter(h => headers.includes(h)),
+                    ...headers.filter(h => !priorityHeaders.includes(h))
+                ];
+                
+                // Create CSV content
+                const csvRows = [];
+                
+                // Add header row
+                csvRows.push(sortedHeaders.map(header => escapeCSVField(header)).join(','));
+                
+                // Add data rows
+                jsonData.forEach(entry => {
+                    const row = sortedHeaders.map(header => {
+                        let value = entry[header];
+                        
+                        // Handle different data types
+                        if (value === undefined || value === null) {
+                            return '';
+                        }
+                        
+                        // Convert lastVisitTime from timestamp to readable date
+                        if (header === 'lastVisitTime' && typeof value === 'number') {
+                            value = new Date(value).toISOString();
+                        }
+                        
+                        return escapeCSVField(String(value));
+                    });
+                    csvRows.push(row.join(','));
+                });
+                
+                csvContent = csvRows.join('\n');
+                downloadBtn.disabled = false;
+                
+                // Show preview
+                const previewLines = csvRows.slice(0, 6); // Header + 5 data rows
+                preview.innerHTML = `<strong>CSV Preview (first 5 rows):</strong>\n${previewLines.join('\n')}`;
+                
+                showStatus(`Successfully converted ${jsonData.length} entries to CSV format.`, 'success');
+                
+            } catch (error) {
+                showStatus(`Error converting to CSV: ${error.message}`, 'error');
+            }
+        }
+        
+        function escapeCSVField(field) {
+            // Escape CSV field by wrapping in quotes if it contains comma, quote, or newline
+            if (field.includes(',') || field.includes('"') || field.includes('\n') || field.includes('\r')) {
+                return '"' + field.replace(/"/g, '""') + '"';
+            }
+            return field;
+        }
+        
+        function downloadCSV() {
+            if (!csvContent) return;
+            
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', 'firefox_history.csv');
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            
+            showStatus('CSV file downloaded successfully!', 'success');
+        }
+        
+        function showStatus(message, type) {
+            status.innerHTML = `<div class="${type}">${message}</div>`;
+        }
+    </script>
+</body>
+</html>
